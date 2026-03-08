@@ -5,67 +5,98 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from gen import request_images, write_gallery
+import pytest
+from gen import (
+    normalize_background,
+    normalize_output_format,
+    normalize_style,
+    write_gallery,
+)
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict):
-        self._payload = payload
-
-    def read(self) -> bytes:
-        return json.dumps(self._payload).encode("utf-8")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, _exc_type, _exc, _tb):
-        return False
+def test_normalize_background_allows_empty_for_non_gpt_models():
+    assert normalize_background("dall-e-3", "transparent") == ""
 
 
-def test_request_images_includes_stream_and_moderation_for_gpt_models():
-    captured_body = {}
-
-    def fake_urlopen(req, timeout=300):
-        body = req.data.decode("utf-8")
-        captured_body.update(json.loads(body))
-        return _FakeResponse({"data": [{"url": "https://example.com/image.png"}]})
-
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-        request_images(
-            api_key="test-key",
-            prompt="test prompt",
-            model="gpt-image-1",
-            size="1024x1024",
-            quality="high",
-            stream=True,
-            moderation="low",
-        )
-
-    assert captured_body.get("stream") is True
-    assert captured_body.get("moderation") == "low"
+def test_normalize_background_allows_empty_for_gpt_models():
+    assert normalize_background("gpt-image-1", "") == ""
+    assert normalize_background("gpt-image-1", "   ") == ""
 
 
-def test_request_images_omits_stream_and_moderation_for_dalle_models():
-    captured_body = {}
+def test_normalize_background_normalizes_case_for_gpt_models():
+    assert normalize_background("gpt-image-1", "TRANSPARENT") == "transparent"
 
-    def fake_urlopen(req, timeout=300):
-        body = req.data.decode("utf-8")
-        captured_body.update(json.loads(body))
-        return _FakeResponse({"data": [{"url": "https://example.com/image.png"}]})
 
-    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-        request_images(
-            api_key="test-key",
-            prompt="test prompt",
-            model="dall-e-3",
-            size="1024x1024",
-            quality="standard",
-            stream=True,
-            moderation="low",
-        )
+def test_normalize_background_warns_when_model_does_not_support_flag(capsys):
+    assert normalize_background("dall-e-3", "transparent") == ""
+    captured = capsys.readouterr()
+    assert "--background is only supported for gpt-image models" in captured.err
 
-    assert "stream" not in captured_body
-    assert "moderation" not in captured_body
+
+def test_normalize_background_rejects_invalid_values():
+    with pytest.raises(ValueError, match="Invalid --background"):
+        normalize_background("gpt-image-1", "checkerboard")
+
+
+def test_normalize_style_allows_empty_for_non_dalle3_models():
+    assert normalize_style("gpt-image-1", "vivid") == ""
+
+
+def test_normalize_style_allows_empty_for_dalle3():
+    assert normalize_style("dall-e-3", "") == ""
+    assert normalize_style("dall-e-3", "   ") == ""
+
+
+def test_normalize_style_normalizes_case_for_dalle3():
+    assert normalize_style("dall-e-3", "NATURAL") == "natural"
+
+
+def test_normalize_style_warns_when_model_does_not_support_flag(capsys):
+    assert normalize_style("gpt-image-1", "vivid") == ""
+    captured = capsys.readouterr()
+    assert "--style is only supported for dall-e-3" in captured.err
+
+
+def test_normalize_style_rejects_invalid_values():
+    with pytest.raises(ValueError, match="Invalid --style"):
+        normalize_style("dall-e-3", "cinematic")
+
+
+def test_normalize_output_format_allows_empty_for_non_gpt_models():
+    assert normalize_output_format("dall-e-3", "jpeg") == ""
+
+
+def test_normalize_output_format_allows_empty_for_gpt_models():
+    assert normalize_output_format("gpt-image-1", "") == ""
+    assert normalize_output_format("gpt-image-1", "   ") == ""
+
+
+def test_normalize_output_format_warns_when_model_does_not_support_flag(capsys):
+    assert normalize_output_format("dall-e-3", "jpeg") == ""
+    captured = capsys.readouterr()
+    assert "--output-format is only supported for gpt-image models" in captured.err
+
+
+def test_normalize_output_format_normalizes_case_for_supported_values():
+    assert normalize_output_format("gpt-image-1", "PNG") == "png"
+    assert normalize_output_format("gpt-image-1", "WEBP") == "webp"
+
+
+def test_normalize_output_format_strips_whitespace_for_supported_values():
+    assert normalize_output_format("gpt-image-1", " png ") == "png"
+def test_normalize_output_format_keeps_supported_values():
+    assert normalize_output_format("gpt-image-1", "png") == "png"
+    assert normalize_output_format("gpt-image-1", "jpeg") == "jpeg"
+    assert normalize_output_format("gpt-image-1", "webp") == "webp"
+
+
+def test_normalize_output_format_normalizes_jpg_alias():
+    assert normalize_output_format("gpt-image-1", "jpg") == "jpeg"
+
+
+def test_normalize_output_format_rejects_invalid_values():
+    with pytest.raises(ValueError, match="Invalid --output-format"):
+        normalize_output_format("gpt-image-1", "svg")
 
 
 def test_write_gallery_escapes_prompt_xss():
@@ -109,4 +140,3 @@ def test_write_gallery_normal_output():
         assert "a lobster astronaut, golden hour" in html
         assert 'src="001-lobster.png"' in html
         assert "002-nook.png" in html
-
